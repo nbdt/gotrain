@@ -9,7 +9,7 @@ import (
 )
 
 var modelANN = &Model{
-	Train:       trainANN,
+	Train:       trainANNConcurent,
 	Description: `ANN - train neural network with back propagation`,
 }
 
@@ -18,6 +18,7 @@ var (
 	learningRate float64
 	errorThresh  float64
 	maxEpochs    int
+	numnets      int
 )
 
 func init() {
@@ -25,6 +26,7 @@ func init() {
 	modelANN.Flag.Float64Var(&learningRate, "learningRate", 1.0, "Learning rate of the of network")
 	modelANN.Flag.Float64Var(&errorThresh, "errorThresh", 0.001, "Minimum epoch error, end training")
 	modelANN.Flag.IntVar(&maxEpochs, "maxEpochs", -1, "Maximum epoch training cycles")
+	modelANN.Flag.IntVar(&numnets, "numnets", 1, "Number of networks to train concurrently")
 }
 
 type Result struct {
@@ -285,7 +287,7 @@ func (n *Network) zeroNeuronValues() {
 
 }
 
-func trainANN(data *TrainData) Executor {
+func trainANN(data TrainData, result chan<- *Network, quit chan struct{}) {
 	if momentum < 0.0 || momentum > 1.0 {
 		fmt.Fprintf(os.Stderr, "momentum [%v] is not between 0.0 and 1.0\n", momentum)
 		os.Exit(2)
@@ -318,28 +320,53 @@ func trainANN(data *TrainData) Executor {
 		numsamp    = float64(len(data.Input))
 		totalError = 0.0
 	)
-	fmt.Fprintln(os.Stdout, "Beginning training of ANN")
 	for (res.toterr > errorThresh || !sampledAll) && (maxEpochs == -1 || res.epoch < maxEpochs) {
-		if sampledAll {
-			if *verbose {
-				fmt.Fprintf(os.Stdout, "epoch %v error = %E\n", res.epoch, res.toterr)
+		select {
+		case <-quit:
+			return
+		default:
+			if sampledAll {
+				if *verbose {
+					fmt.Fprintf(os.Stdout, "epoch %v error %E\n",
+						res.epoch, res.toterr)
+				}
+				res.epoch++
+				res.toterr = 0.0
 			}
-			res.epoch++
-			res.toterr = 0.0
+			choice, sampledAll = sgd.ChooseOne()
+			h := n.feedForward(data.Input[choice])
+			totalError = 0
+			for idx := range h {
+				// Sum average total error across all output neurons
+				totalError += n.EF(h[idx], data.Output[choice][idx])
+			}
+			res.toterr = totalError / numsamp
+			n.backPropagate(data.Output[choice])
+			sampnum++
 		}
-		choice, sampledAll = sgd.ChooseOne()
-		h := n.feedForward(data.Input[choice])
-		totalError = 0
-		for idx := range h {
-			// Sum average total error across all output neurons
-			totalError += n.EF(h[idx], data.Output[choice][idx])
-		}
-		res.toterr = totalError / numsamp
-		n.backPropagate(data.Output[choice])
-		sampnum++
 	}
 	fmt.Fprintln(os.Stdout, "Complete training of ANN")
 	fmt.Fprintf(os.Stdout, "After final epoch %v error = %E\n", res.epoch, res.toterr)
+	result <- n
+	close(quit)
+}
+
+func trainANNConcurent(data *TrainData) (n Executor) {
+	fmt.Fprintln(os.Stdout, "Beginning training of ANN")
+	result := make(chan *Network)
+	quit := make(chan struct{})
+	for n := 0; n < numnets; n++ {
+		go trainANN(*data, result, quit)
+	}
+	for numnets > 0 {
+		select {
+		case <-quit:
+			numnets--
+		case n = <-result:
+			numnets--
+		}
+	}
+	close(result)
 	return n
 }
 
@@ -371,7 +398,7 @@ var Sigmoid Activator = Activate{
 	backward: func(x float64) float64 { return x * (1 - x) },
 }
 
-var Tahn Activator = Activate{
+var Tanh Activator = Activate{
 	forward:  math.Tanh,
 	backward: func(x float64) float64 { return 1 - math.Pow(x, 2) },
 }
