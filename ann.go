@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -287,7 +288,8 @@ func (n *Network) zeroNeuronValues() {
 
 }
 
-func trainANN(data TrainData, result chan<- *Network, quit chan struct{}) {
+func trainANN(data *TrainData, result chan<- *Network, done <-chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
 	if momentum < 0.0 || momentum > 1.0 {
 		fmt.Fprintf(os.Stderr, "momentum [%v] is not between 0.0 and 1.0\n", momentum)
 		os.Exit(2)
@@ -322,7 +324,7 @@ func trainANN(data TrainData, result chan<- *Network, quit chan struct{}) {
 	)
 	for (res.toterr > errorThresh || !sampledAll) && (maxEpochs == -1 || res.epoch < maxEpochs) {
 		select {
-		case <-quit:
+		case <-done:
 			return
 		default:
 			if sampledAll {
@@ -347,27 +349,27 @@ func trainANN(data TrainData, result chan<- *Network, quit chan struct{}) {
 	}
 	fmt.Fprintln(os.Stdout, "Complete training of ANN")
 	fmt.Fprintf(os.Stdout, "After final epoch %v error = %E\n", res.epoch, res.toterr)
-	result <- n
-	close(quit)
+	select {
+	case result <- n:
+	case <-done:
+		return
+	}
 }
 
 func trainANNConcurent(data *TrainData) (n Executor) {
 	fmt.Fprintln(os.Stdout, "Beginning training of ANN")
 	result := make(chan *Network)
-	quit := make(chan struct{})
+	done := make(chan struct{})
+	wg := sync.WaitGroup{}
+	wg.Add(numnets)
 	for n := 0; n < numnets; n++ {
-		go trainANN(*data, result, quit)
+		go trainANN(data, result, done, &wg)
 	}
-	for numnets > 0 {
-		select {
-		case <-quit:
-			numnets--
-		case n = <-result:
-			numnets--
-		}
-	}
+	network := <-result
+	close(done)
+	wg.Wait()
 	close(result)
-	return n
+	return network
 }
 
 type Activator interface {
