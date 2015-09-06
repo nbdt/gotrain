@@ -28,11 +28,14 @@ func init() {
 	modelANN.Flag.Float64Var(&errorThresh, "errorThresh", 0.001, "Minimum epoch error, end training")
 	modelANN.Flag.IntVar(&maxEpochs, "maxEpochs", -1, "Maximum epoch training cycles")
 	modelANN.Flag.IntVar(&numnets, "numnets", 1, "Number of networks to train concurrently")
-}
-
-type Result struct {
-	epoch  int
-	toterr float64
+	if momentum < 0.0 || momentum > 1.0 {
+		fmt.Fprintf(os.Stderr, "momentum [%v] is not between 0.0 and 1.0\n", momentum)
+		os.Exit(2)
+	}
+	if learningRate < 0.0 || learningRate > 1.0 {
+		fmt.Fprintf(os.Stderr, "learning rate [%v] is not between 0.0 and 1.0\n", learningRate)
+		os.Exit(2)
+	}
 }
 
 // Connection to forward layer
@@ -140,6 +143,8 @@ type Network struct {
 	numlayers      int
 	eta            float64
 	momentum       float64
+	epochErr       float64
+	epoch          int
 }
 
 // NewNetwork construct the network based on the topology described in
@@ -288,16 +293,13 @@ func (n *Network) zeroNeuronValues() {
 
 }
 
-func trainANN(data *TrainData, result chan<- *Network, done <-chan struct{}, wg *sync.WaitGroup) {
+type Result struct {
+	net  Network
+	resp chan bool
+}
+
+func trainANN(data *TrainData, result chan<- *Result, quit chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
-	if momentum < 0.0 || momentum > 1.0 {
-		fmt.Fprintf(os.Stderr, "momentum [%v] is not between 0.0 and 1.0\n", momentum)
-		os.Exit(2)
-	}
-	if learningRate < 0.0 || learningRate > 1.0 {
-		fmt.Fprintf(os.Stderr, "learning rate [%v] is not between 0.0 and 1.0\n", learningRate)
-		os.Exit(2)
-	}
 	// Define weight initialization function
 	source := rand.NewSource(time.Now().UnixNano())
 	pRNG := rand.New(source)
@@ -309,7 +311,7 @@ func trainANN(data *TrainData, result chan<- *Network, done <-chan struct{}, wg 
 		SetErrorer(MSE),
 		SetWeightInitFunc(WeightInitFunc),
 		AddLayer(len(data.Input[0]), true, Sigmoid),
-		AddLayer(50, true, Sigmoid),
+		AddLayer(25, true, Sigmoid),
 		AddLayer(len(data.Output[0]), false, Sigmoid))
 
 	// Train with stochastic gradient descent
@@ -317,59 +319,100 @@ func trainANN(data *TrainData, result chan<- *Network, done <-chan struct{}, wg 
 		sgd        = NewSGD(len(data.Input), pRNG)
 		choice     = 0
 		sampledAll = false
-		res        = &Result{epoch: 1}
-		sampnum    = 0
 		numsamp    = float64(len(data.Input))
-		totalError = 0.0
+		sampError  = 0.0
 	)
-	for (res.toterr > errorThresh || !sampledAll) && (maxEpochs == -1 || res.epoch < maxEpochs) {
+	for {
 		select {
-		case <-done:
+		case <-quit:
 			return
 		default:
 			if sampledAll {
 				if *verbose {
-					fmt.Fprintf(os.Stdout, "epoch %v error %E\n",
-						res.epoch, res.toterr)
+					fmt.Fprintf(os.Stdout, "epoch %v error %E\n", n.epoch, n.epochErr)
 				}
-				res.epoch++
-				res.toterr = 0.0
+				res := &Result{
+					net:  *n,
+					resp: make(chan bool),
+				}
+				select {
+				case <-quit:
+					return
+				case result <- res:
+					done := <-res.resp
+					close(res.resp)
+					if done {
+						return
+					}
+					n.epoch++
+					n.epochErr = 0.0
+				}
 			}
 			choice, sampledAll = sgd.ChooseOne()
 			h := n.feedForward(data.Input[choice])
-			totalError = 0
+			sampError = 0.0
 			for idx := range h {
 				// Sum average total error across all output neurons
-				totalError += n.EF(h[idx], data.Output[choice][idx])
+				sampError += n.EF(h[idx], data.Output[choice][idx])
 			}
-			res.toterr = totalError / numsamp
+			n.epochErr = sampError / numsamp
 			n.backPropagate(data.Output[choice])
-			sampnum++
 		}
-	}
-	fmt.Fprintln(os.Stdout, "Complete training of ANN")
-	fmt.Fprintf(os.Stdout, "After final epoch %v error = %E\n", res.epoch, res.toterr)
-	select {
-	case result <- n:
-	case <-done:
-		return
 	}
 }
 
 func trainANNConcurent(data *TrainData) (n Executor) {
-	fmt.Fprintln(os.Stdout, "Beginning training of ANN")
-	result := make(chan *Network)
-	done := make(chan struct{})
-	wg := sync.WaitGroup{}
+	// define a keeper incase training never drops below the defined
+	// error threshold. if we break on max epochs, we keep the network
+	// with the lowest epoch error.
+	keeper := Network{epochErr: 1.0}
+
+	fmt.Fprintf(os.Stdout, "Beginning training of ANN until max epoch: %v or error threshold: %v\n",
+		maxEpochs, errorThresh)
+	result := make(chan *Result)
+	quit := make(chan struct{})
+	wg := &sync.WaitGroup{}
 	wg.Add(numnets)
 	for n := 0; n < numnets; n++ {
-		go trainANN(data, result, done, &wg)
+		go trainANN(data, result, quit, wg)
 	}
-	network := <-result
-	close(done)
+	// Either one network trains below the error threshold
+	// or all networks reach the epoch limit.
+	// If the epoch limit is reached by all, return the keeper,
+	// that is the network with the lowest insample error.
+	var res *Result
+	var trialsFinished int
+TrainLoop:
+	for {
+		select {
+		case res = <-result:
+			if res.net.epochErr < keeper.epochErr {
+				keeper = res.net
+			}
+			if res.net.epochErr < errorThresh {
+				close(quit)
+				res.resp <- true
+				break TrainLoop
+			} else if res.net.epoch == maxEpochs {
+				res.resp <- true
+				trialsFinished++
+				if trialsFinished == numnets {
+					close(quit)
+					break TrainLoop
+				}
+			} else {
+				res.resp <- false
+			}
+		}
+	}
 	wg.Wait()
 	close(result)
-	return network
+	if keeper.epochErr < res.net.epochErr {
+		res.net = keeper
+	}
+	fmt.Fprintln(os.Stdout, "Complete training of ANN")
+	fmt.Fprintf(os.Stdout, "After final epoch %v error = %E\n", res.net.epoch, res.net.epochErr)
+	return &res.net
 }
 
 type Activator interface {
