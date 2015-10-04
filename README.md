@@ -16,15 +16,11 @@ $ ./gotrain -datapath ./xor.csv ANN
 
 For help on global flags:
 
-```
-$ ./gotrain -h
-```
+`$ ./gotrain -h`
 
 For help on model specific flags:
 
-```
-$ ./gotrain ANN -h
-```
+`$ ./gotrain ANN -h`
 
 ## Future enhancements
 
