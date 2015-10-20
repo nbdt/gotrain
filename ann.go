@@ -3,40 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
-	"math/rand"
-	"os"
-	"sync"
-	"time"
 )
-
-var modelANN = &Model{
-	Train:       trainANNConcurent,
-	Description: `ANN - train neural network with back propagation`,
-}
-
-var (
-	momentum     float64
-	learningRate float64
-	errorThresh  float64
-	maxEpochs    int
-	numnets      int
-)
-
-func init() {
-	modelANN.Flag.Float64Var(&momentum, "momentum", 0.0, "Momentum of network (default 0)")
-	modelANN.Flag.Float64Var(&learningRate, "learningRate", 1.0, "Learning rate of the of network")
-	modelANN.Flag.Float64Var(&errorThresh, "errorThresh", 0.001, "Minimum epoch error, end training")
-	modelANN.Flag.IntVar(&maxEpochs, "maxEpochs", -1, "Maximum epoch training cycles")
-	modelANN.Flag.IntVar(&numnets, "numnets", 1, "Number of networks to train concurrently")
-	if momentum < 0.0 || momentum > 1.0 {
-		fmt.Fprintf(os.Stderr, "momentum [%v] is not between 0.0 and 1.0\n", momentum)
-		os.Exit(2)
-	}
-	if learningRate < 0.0 || learningRate > 1.0 {
-		fmt.Fprintf(os.Stderr, "learning rate [%v] is not between 0.0 and 1.0\n", learningRate)
-		os.Exit(2)
-	}
-}
 
 // Connection to forward layer
 type Connection struct {
@@ -68,8 +35,7 @@ type Bias struct {
 type Layer struct {
 	Neurons    []*Neuron
 	Bias       *Bias
-	AF         func(input float64) float64
-	AFPrime    func(input float64) float64
+	A          Activator
 	numneurons int
 }
 
@@ -90,8 +56,7 @@ func AddLayer(numneurons int, includeBias bool, a Activator) func(*Network) {
 	layer := &Layer{
 		Neurons:    neurons,
 		Bias:       bias,
-		AF:         a.F,
-		AFPrime:    a.FPrime,
+		A:          a,
 		numneurons: numneurons,
 	}
 	return func(n *Network) {
@@ -133,6 +98,15 @@ func SetWeightInitFunc(WeightInitFunc func() float64) func(*Network) {
 	}
 }
 
+type TrainStatus struct {
+	epochErr float64
+	epoch    int
+}
+
+func (ts *TrainStatus) String() string {
+	return fmt.Sprintf("Epoch %v: error=%.4f%%", ts.epoch, 100.0*ts.epochErr)
+}
+
 // Network holds all knowedlge of the network.
 type Network struct {
 	Layers         []*Layer
@@ -143,8 +117,6 @@ type Network struct {
 	numlayers      int
 	eta            float64
 	momentum       float64
-	epochErr       float64
-	epoch          int
 }
 
 // NewNetwork construct the network based on the topology described in
@@ -188,94 +160,8 @@ func (n *Network) connectForwardLayer(cxns []*Connection, layertoconnect int) {
 	}
 }
 
-// feedForward runs the feed forward pass based on inputs and produces outputs of the network
-func (n *Network) feedForward(inputs []float64) (outputs []float64) {
-	// Set value of input neurons
-	for idx, inputneuron := range n.Layers[0].Neurons {
-		inputneuron.Value = n.Layers[0].AF(inputs[idx])
-	}
-
-	for idx, layer := range n.Layers {
-		for _, neuron := range layer.Neurons {
-			for _, cxn := range neuron.Connections {
-				cxn.toNeuron.Value += neuron.Value * cxn.Weight
-			}
-		}
-		if layer.Bias != nil {
-			for _, cxn := range layer.Bias.Connections {
-				cxn.toNeuron.Value += layer.Bias.OUT * cxn.Weight
-			}
-		}
-		if idx < n.numlayers-1 {
-			for _, neuron := range n.Layers[idx+1].Neurons {
-				neuron.Value = n.Layers[idx+1].AF(neuron.Value)
-			}
-		}
-	}
-
-	// Get values from output neurons to return
-	outputs = make([]float64, n.numout)
-	for idx, outputneuron := range n.Layers[n.numlayers-1].Neurons {
-		outputs[idx] = outputneuron.Value
-	}
-	return outputs
-}
-
-// Execute prediction on input given a trained network
-func (n *Network) Execute(input []float64) []float64 {
-	output := n.feedForward(input)
-	n.zeroNeuronValues()
-	return output
-}
-
-// backPropagate adjusts the connection weights of the network based on the error, Delta,
-// of each neuron computed during gradient decent
-func (n *Network) backPropagate(targets []float64) {
-	// Calculate delta of output layer
-	outputlayer := n.Layers[n.numlayers-1]
-	for idx, neuron := range outputlayer.Neurons {
-		neuron.Delta = n.EFPrime(neuron.Value, targets[idx]) * outputlayer.AFPrime(neuron.Value)
-	}
-
-	for idx := n.numlayers - 2; idx >= 0; idx-- {
-		layer := n.Layers[idx]
-		for _, neuron := range layer.Neurons {
-			for _, cxn := range neuron.Connections {
-				neuron.Delta += cxn.Weight * cxn.toNeuron.Delta
-			}
-			neuron.Delta *= layer.AFPrime(neuron.Value)
-		}
-		if layer.Bias != nil {
-			for _, cxn := range layer.Bias.Connections {
-				layer.Bias.Delta += cxn.Weight * cxn.toNeuron.Delta
-			}
-			layer.Bias.Delta *= layer.AFPrime(layer.Bias.OUT)
-		}
-	}
-	n.updateWeights()
-	n.zeroNeuronValues()
-}
-
-// updateWeights based on precomputed deltas during back propagation
-func (n *Network) updateWeights() {
-	for _, layer := range n.Layers {
-		for _, neuron := range layer.Neurons {
-			for _, cxn := range neuron.Connections {
-				momentumTerm := n.momentum * cxn.prevChange
-				weightChange := n.eta*neuron.Value*cxn.toNeuron.Delta + momentumTerm
-				cxn.prevChange = weightChange
-				cxn.Weight -= weightChange
-			}
-		}
-		if layer.Bias != nil {
-			for _, cxn := range layer.Bias.Connections {
-				momentumTerm := n.momentum * cxn.prevChange
-				weightChange := n.eta*layer.Bias.ONE*cxn.toNeuron.Delta + momentumTerm
-				cxn.prevChange = weightChange
-				cxn.Weight -= weightChange
-			}
-		}
-	}
+func (n *Network) calcError(x, y float64) float64 {
+	return n.EF(x, y)
 }
 
 // zeroNeuronValues to return the state of the network to accept new inputs.
@@ -290,139 +176,27 @@ func (n *Network) zeroNeuronValues() {
 			layer.Bias.Delta = 0.0
 		}
 	}
-
 }
 
-type Result struct {
-	net  Network
-	resp chan bool
-}
-
-func trainANN(data *TrainData, result chan<- *Result, quit chan struct{}, wg *sync.WaitGroup) {
-	defer wg.Done()
-	// Define weight initialization function
-	source := rand.NewSource(time.Now().UnixNano())
-	pRNG := rand.New(source)
-	WeightInitFunc := func() float64 {
-		return 2 * (pRNG.Float64() - 0.5)
+func (n *Network) String() string {
+	s := "Network topology\n"
+	for idx, layer := range n.Layers {
+		s += fmt.Sprintf("Layer %v: %v with activation function %v\n",
+			idx, layer.numneurons, layer.A.String())
 	}
-	n := NewNetwork(SetLearningRate(learningRate),
-		SetMomentum(momentum),
-		SetErrorer(MSE),
-		SetWeightInitFunc(WeightInitFunc),
-		AddLayer(len(data.Input[0]), true, Sigmoid),
-		AddLayer(25, true, Sigmoid),
-		AddLayer(len(data.Output[0]), false, Sigmoid))
-
-	// Train with stochastic gradient descent
-	var (
-		sgd        = NewSGD(len(data.Input), pRNG)
-		choice     = 0
-		sampledAll = false
-		numsamp    = float64(len(data.Input))
-		sampError  = 0.0
-	)
-	for {
-		select {
-		case <-quit:
-			return
-		default:
-			if sampledAll {
-				if *verbose {
-					fmt.Fprintf(os.Stdout, "epoch %v error %E\n", n.epoch, n.epochErr)
-				}
-				res := &Result{
-					net:  *n,
-					resp: make(chan bool),
-				}
-				select {
-				case <-quit:
-					return
-				case result <- res:
-					done := <-res.resp
-					close(res.resp)
-					if done {
-						return
-					}
-					n.epoch++
-					n.epochErr = 0.0
-				}
-			}
-			choice, sampledAll = sgd.ChooseOne()
-			h := n.feedForward(data.Input[choice])
-			sampError = 0.0
-			for idx := range h {
-				// Sum average total error across all output neurons
-				sampError += n.EF(h[idx], data.Output[choice][idx])
-			}
-			n.epochErr = sampError / numsamp
-			n.backPropagate(data.Output[choice])
-		}
-	}
-}
-
-func trainANNConcurent(data *TrainData) (n Executor) {
-	// define a keeper incase training never drops below the defined
-	// error threshold. if we break on max epochs, we keep the network
-	// with the lowest epoch error.
-	keeper := Network{epochErr: 1.0}
-
-	fmt.Fprintf(os.Stdout, "Beginning training of ANN until max epoch: %v or error threshold: %v\n",
-		maxEpochs, errorThresh)
-	result := make(chan *Result)
-	quit := make(chan struct{})
-	wg := &sync.WaitGroup{}
-	wg.Add(numnets)
-	for n := 0; n < numnets; n++ {
-		go trainANN(data, result, quit, wg)
-	}
-	// Either one network trains below the error threshold
-	// or all networks reach the epoch limit.
-	// If the epoch limit is reached by all, return the keeper,
-	// that is the network with the lowest insample error.
-	var res *Result
-	var trialsFinished int
-TrainLoop:
-	for {
-		select {
-		case res = <-result:
-			if res.net.epochErr < keeper.epochErr {
-				keeper = res.net
-			}
-			if res.net.epochErr < errorThresh {
-				close(quit)
-				res.resp <- true
-				break TrainLoop
-			} else if res.net.epoch == maxEpochs {
-				res.resp <- true
-				trialsFinished++
-				if trialsFinished == numnets {
-					close(quit)
-					break TrainLoop
-				}
-			} else {
-				res.resp <- false
-			}
-		}
-	}
-	wg.Wait()
-	close(result)
-	if keeper.epochErr < res.net.epochErr {
-		res.net = keeper
-	}
-	fmt.Fprintln(os.Stdout, "Complete training of ANN")
-	fmt.Fprintf(os.Stdout, "After final epoch %v error = %E\n", res.net.epoch, res.net.epochErr)
-	return &res.net
+	return s
 }
 
 type Activator interface {
 	F(x float64) float64
 	FPrime(x float64) float64
+	String() string
 }
 
 type Activate struct {
 	forward  func(x float64) float64
 	backward func(x float64) float64
+	name     string
 }
 
 func (a Activate) F(x float64) float64 {
@@ -433,19 +207,38 @@ func (a Activate) FPrime(x float64) float64 {
 	return a.backward(x)
 }
 
+func (a Activate) String() string {
+	return a.name
+}
+
+var Binary Activator = Activate{
+	forward: func(x float64) float64 {
+		if x > 0.5 {
+			return 1.0
+		} else {
+			return 0.0
+		}
+	},
+	backward: func(x float64) float64 { return 1.0 },
+	name:     "Binary",
+}
+
 var Linear Activator = Activate{
 	forward:  func(x float64) float64 { return x },
 	backward: func(x float64) float64 { return 1.0 },
+	name:     "Linear",
 }
 
 var Sigmoid Activator = Activate{
 	forward:  func(x float64) float64 { return 1 / (1 + math.Exp(-x)) },
 	backward: func(x float64) float64 { return x * (1 - x) },
+	name:     "Sigmoid",
 }
 
 var Tanh Activator = Activate{
 	forward:  math.Tanh,
 	backward: func(x float64) float64 { return 1 - math.Pow(x, 2) },
+	name:     "Tanh",
 }
 
 type ErrFunc struct {

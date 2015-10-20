@@ -8,11 +8,12 @@ import (
 )
 
 var (
-	datapath   = flag.String("datapath", "", "path to train data csv")
-	exportpath = flag.String("exportpath", "", "path to export model after training")
-	cvsettings = flag.String("cvsettings", "", "path to cross validation settings file")
-	outputs    = flag.Int("outputs", 1, "number of training outputs")
-	verbose    = flag.Bool("verbose", false, "verbose output")
+	traindatapath    = flag.String("traindatapath", "", "path to train data csv")
+	validatedatapath = flag.String("validatedatapath", "", "path to train data csv")
+	exportpath       = flag.String("exportpath", "", "path to export model after training")
+	cvsettings       = flag.String("cvsettings", "", "path to cross validation settings file")
+	outputs          = flag.Int("outputs", 1, "number of training outputs")
+	verbose          = flag.Bool("verbose", false, "verbose output")
 )
 
 type Executor interface {
@@ -43,9 +44,14 @@ func (m *Model) Name() string {
 	return name
 }
 
-func (c *Model) Usage() {
-	fmt.Fprintf(os.Stderr, "usage: %s [MODEL OPTION]...\n\n", c.Name())
-	c.Flag.PrintDefaults()
+func (m *Model) String() string {
+	return m.Name()
+}
+
+func (m *Model) Usage() {
+	fmt.Fprintf(os.Stderr, "usage: %s [MODEL OPTION]...\n\n", m.Name())
+	m.Flag.PrintDefaults()
+	fmt.Fprintln(os.Stderr)
 	os.Exit(2)
 }
 
@@ -56,19 +62,21 @@ func (m *Model) SetExecutor(e Executor) {
 // models list the available models and usage.
 // The order here is the order in which they are printed by 'gotrain help'.
 var models = []*Model{
-	modelANN,
+	modelMLP,
 }
 
 func main() {
 	flag.Usage = usage
 	flag.Parse()
 	args := flag.Args()
+	didSomethingHappen := false
 
 	for _, model := range models {
 		if model.Name() == args[0] {
+			didSomethingHappen = true
 			model.Flag.Usage = func() { model.Usage() }
 			model.Flag.Parse(args[1:])
-			data, err := ReadCSV(*datapath, *outputs)
+			data, err := ReadCSV(*traindatapath, *outputs)
 			if err != nil {
 				fmt.Printf("%s\n", err)
 				os.Exit(1)
@@ -78,18 +86,26 @@ func main() {
 			if *exportpath != "" {
 				fmt.Fprintln(os.Stderr, "Model export not yet implemented")
 			}
+			if *validatedatapath != "" {
+				doValidation(model.Predict)
+			}
 		}
+	}
+	if !didSomethingHappen {
+		fmt.Fprintf(os.Stderr, "Model %v not recognized, models: %v are supported\n",
+			args[0], models)
 	}
 	os.Exit(0)
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "%s\n\n", "usage: gotrain [OPTION]... model [MODEL OPTION]...\n")
+	fmt.Fprintf(os.Stderr, "%s\n\n", "usage: gotrain [OPTION]... model [MODEL OPTION]...")
 	fmt.Fprintln(os.Stderr, "OPTION flags include:")
 	flag.PrintDefaults()
 	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "Available models include:")
 	for _, model := range models {
 		fmt.Fprintf(os.Stderr, "%s\n", model.Description)
 	}
-	fmt.Fprintln(os.Stderr, "\nFor help on model options use train MODEL -help")
+	fmt.Fprintln(os.Stderr, "\nFor help on model options use train MODEL -h\n")
 }

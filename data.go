@@ -86,3 +86,8 @@ func ReadCSV(datapath string, numclasses int) (*TrainData, error) {
 
 	return d, nil
 }
+
+func isStopEarly() bool {
+	_, err := os.Stat("./stopearly")
+	return !os.IsNotExist(err)
+}

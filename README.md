@@ -2,7 +2,7 @@ Gotrain fits feedforward backpropigation neural networks to classification data.
 
 ## Usage
 
-Create a toy dataset and train an artifical neural network (ANN):
+Create a toy dataset and train a multilayer perceptron network (MLP):
 
 ```
 $ cat > ./xor.csv <<EOF
@@ -11,16 +11,16 @@ $ cat > ./xor.csv <<EOF
 0,0,0
 0,1,1
 EOF
-$ ./gotrain -datapath ./xor.csv ANN
+$ ./gotrain -datapath ./xor.csv MLP
 ```
 
-For help on global flags:
+For help on global flags and available artificial neuro networks (ANNs):
 
 `$ ./gotrain -h`
 
 For help on model specific flags:
 
-`$ ./gotrain ANN -h`
+`$ ./gotrain MLP -h`
 
 ## Future enhancements
 
