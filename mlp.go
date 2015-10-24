@@ -2,10 +2,8 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
 	"os"
 	"sync"
-	"time"
 )
 
 var modelMLP = &Model{
@@ -19,6 +17,7 @@ var (
 	errorThresh  float64
 	maxEpochs    int
 	numnets      int
+	batchsize    int
 )
 
 func init() {
@@ -26,7 +25,10 @@ func init() {
 	modelMLP.Flag.Float64Var(&learningRate, "learningRate", 1.0, "Learning rate of the of network")
 	modelMLP.Flag.Float64Var(&errorThresh, "errorThresh", 0.001, "Minimum epoch error, end training")
 	modelMLP.Flag.IntVar(&maxEpochs, "maxEpochs", -1, "Maximum epoch training cycles")
+	//for model parallelism
 	modelMLP.Flag.IntVar(&numnets, "numnets", 1, "Number of networks to train concurrently")
+	//for data parallelism
+	modelMLP.Flag.IntVar(&batchsize, "batchsize", 1, "number of batches within an epoch")
 	if momentum < 0.0 || momentum > 1.0 {
 		fmt.Fprintf(os.Stderr, "momentum [%v] is not between 0.0 and 1.0\n", momentum)
 		os.Exit(2)
@@ -40,7 +42,7 @@ func init() {
 type MLP interface {
 	feedForward(inputs []float64) (outputs []float64)
 	backPropagate(targets []float64)
-	zeroNeuronValues()
+	zeroNetwork()
 	calcError(x, y float64) float64
 	Execute(inputs []float64) (outputs []float64)
 	String() string
@@ -48,26 +50,24 @@ type MLP interface {
 
 // NewMLP constructs the convolutional neuro network based on the topology described in
 // Add* and Set* options
-func NewMLP(insize, outsize int, pRNG *rand.Rand) MLP {
+func NewMLP(insize, outsize int) MLP {
 	// Define weight initialization function
-	WeightInitFunc := func() float64 {
-		return 2 * (pRNG.Float64() - 0.5)
-	}
 	n := NewNetwork(SetLearningRate(learningRate),
 		SetMomentum(momentum),
 		SetErrorer(MSE),
-		SetWeightInitFunc(WeightInitFunc),
-		AddLayer(insize, true, Tanh),
-		AddLayer(25, true, Tanh),
+		SetWeightInitFunc(Normal(0.0, 0.1)),
+		AddInputLayer(insize),
+		AddLayer(100, false, Tanh),
+		AddLayer(50, false, Tanh),
 		AddLayer(outsize, false, Sigmoid))
 	return n
 }
 
 // feedForward runs the feed forward pass based on inputs and produces outputs of the network
 func (n *Network) feedForward(inputs []float64) (outputs []float64) {
-	// Set value of input neurons
-	for idx, inputneuron := range n.Layers[0].Neurons {
-		inputneuron.Value = n.Layers[0].A.F(inputs[idx])
+	// Set input layer values
+	for idx, val := range inputs {
+		n.Layers[0].Neurons[idx].Value = val
 	}
 
 	for idx, layer := range n.Layers {
@@ -81,6 +81,7 @@ func (n *Network) feedForward(inputs []float64) (outputs []float64) {
 				cxn.toNeuron.Value += layer.Bias.OUT * cxn.Weight
 			}
 		}
+		//Dont apply the activation function to the input layer
 		if idx < n.numlayers-1 {
 			for _, neuron := range n.Layers[idx+1].Neurons {
 				neuron.Value = n.Layers[idx+1].A.F(neuron.Value)
@@ -105,7 +106,7 @@ func (n *Network) backPropagate(targets []float64) {
 		neuron.Delta = n.EFPrime(neuron.Value, targets[idx]) * outputlayer.A.FPrime(neuron.Value)
 	}
 
-	for idx := n.numlayers - 2; idx >= 0; idx-- {
+	for idx := n.numlayers - 2; idx >= 1; idx-- {
 		layer := n.Layers[idx]
 		for _, neuron := range layer.Neurons {
 			for _, cxn := range neuron.Connections {
@@ -138,13 +139,13 @@ func (n *Network) backPropagate(targets []float64) {
 			}
 		}
 	}
-	n.zeroNeuronValues()
+	n.zeroNetwork()
 }
 
 // Execute prediction on input given a trained network
 func (n *Network) Execute(input []float64) []float64 {
 	output := n.feedForward(input)
-	n.zeroNeuronValues()
+	n.zeroNetwork()
 	return output
 }
 
@@ -156,9 +157,7 @@ type MLPResult struct {
 
 func trainMLP(data *TrainData, result chan<- MLPResult, quit chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
-	source := rand.NewSource(time.Now().UnixNano())
-	pRNG := rand.New(source)
-	n := NewMLP(len(data.Input[0]), len(data.Output[0]), pRNG)
+	n := NewMLP(len(data.Input[0]), len(data.Output[0]))
 	fmt.Fprintf(os.Stdout, "%v\n", n)
 
 	ts := &TrainStatus{

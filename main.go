@@ -3,13 +3,18 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
+	"runtime/pprof"
 	"strings"
+	"time"
 )
 
 var (
+	cpuprofile       = flag.String("cpuprofile", "", "write cpu profile to file")
 	traindatapath    = flag.String("traindatapath", "", "path to train data csv")
 	validatedatapath = flag.String("validatedatapath", "", "path to train data csv")
+	testdatapath     = flag.String("testdatapath", "", "path to train data csv")
 	exportpath       = flag.String("exportpath", "", "path to export model after training")
 	cvsettings       = flag.String("cvsettings", "", "path to cross validation settings file")
 	outputs          = flag.Int("outputs", 1, "number of training outputs")
@@ -65,11 +70,27 @@ var models = []*Model{
 	modelMLP,
 }
 
+var pRNG *rand.Rand
+
+func init() {
+	source := rand.NewSource(time.Now().UnixNano())
+	pRNG = rand.New(source)
+}
+
 func main() {
 	flag.Usage = usage
 	flag.Parse()
 	args := flag.Args()
 	didSomethingHappen := false
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	for _, model := range models {
 		if model.Name() == args[0] {
@@ -89,13 +110,16 @@ func main() {
 			if *validatedatapath != "" {
 				doValidation(model.Predict)
 			}
+			if *testdatapath != "" {
+				doTest(model.Predict)
+			}
 		}
 	}
 	if !didSomethingHappen {
 		fmt.Fprintf(os.Stderr, "Model %v not recognized, models: %v are supported\n",
 			args[0], models)
 	}
-	os.Exit(0)
+	fmt.Fprintln(os.Stderr, "Exiting cleanly")
 }
 
 func usage() {

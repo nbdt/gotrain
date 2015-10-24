@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -71,7 +72,7 @@ func ReadCSV(datapath string, numclasses int) (*TrainData, error) {
 				return nil, err
 			}
 		}
-		d.Input = append(d.Input, inf)
+		d.Input = append(d.Input, Normalize(inf))
 
 		out := row[:numclasses]
 		outf := make([]float64, len(out))
@@ -85,6 +86,28 @@ func ReadCSV(datapath string, numclasses int) (*TrainData, error) {
 	}
 
 	return d, nil
+}
+
+func Normalize(d []float64) []float64 {
+	var (
+		mean float64
+		std  float64
+	)
+	numsamp := len(d)
+	for _, v := range d {
+		mean += v
+	}
+	mean /= float64(numsamp)
+	for _, v := range d {
+		std += math.Pow(v-mean, 2)
+	}
+	std /= float64(numsamp)
+	std = math.Sqrt(std)
+	res := make([]float64, numsamp)
+	for idx, v := range d {
+		res[idx] = (v - mean) / std
+	}
+	return res
 }
 
 func isStopEarly() bool {

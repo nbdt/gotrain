@@ -65,6 +65,25 @@ func AddLayer(numneurons int, includeBias bool, a Activator) func(*Network) {
 	}
 }
 
+// AddInputLayer to the network with n neurons
+// Pass this function into NewNetwork to add a layer to the network.
+func AddInputLayer(numneurons int) func(*Network) {
+	neurons := make([]*Neuron, numneurons)
+	for idx := range neurons {
+		neurons[idx] = &Neuron{}
+	}
+	layer := &Layer{
+		Neurons:    neurons,
+		Bias:       nil,
+		A:          nil,
+		numneurons: numneurons,
+	}
+	return func(n *Network) {
+		n.Layers = append(n.Layers, layer)
+		n.numlayers++
+	}
+}
+
 // SettErrorFunction of the network.
 // Pass this function into NewNetwork to set the error function of the network
 func SetErrorer(e ErrFuncer) func(*Network) {
@@ -92,9 +111,9 @@ func SetMomentum(momentum float64) func(*Network) {
 
 // SetWeightInitFunc of the network.
 // Pass this function into NewNetwork to set the weight initalization function.
-func SetWeightInitFunc(WeightInitFunc func() float64) func(*Network) {
+func SetWeightInitFunc(weightPRNG WeightGenerator) func(*Network) {
 	return func(n *Network) {
-		n.WeightInitFunc = WeightInitFunc
+		n.WeightGenerator = weightPRNG
 	}
 }
 
@@ -109,14 +128,14 @@ func (ts *TrainStatus) String() string {
 
 // Network holds all knowedlge of the network.
 type Network struct {
-	Layers         []*Layer
-	EF             func(x, y float64) float64
-	EFPrime        func(x, y float64) float64
-	WeightInitFunc func() float64
-	numout         int
-	numlayers      int
-	eta            float64
-	momentum       float64
+	Layers          []*Layer
+	EF              func(x, y float64) float64
+	EFPrime         func(x, y float64) float64
+	WeightGenerator WeightGenerator
+	numout          int
+	numlayers       int
+	eta             float64
+	momentum        float64
 }
 
 // NewNetwork construct the network based on the topology described in
@@ -155,7 +174,7 @@ func (n *Network) connectForwardLayer(cxns []*Connection, layertoconnect int) {
 	for idx := range cxns {
 		cxns[idx] = &Connection{
 			toNeuron: n.Layers[layertoconnect].Neurons[idx],
-			Weight:   n.WeightInitFunc(),
+			Weight:   n.WeightGenerator.Init(),
 		}
 	}
 }
@@ -166,7 +185,7 @@ func (n *Network) calcError(x, y float64) float64 {
 
 // zeroNeuronValues to return the state of the network to accept new inputs.
 // should be run after backpropagation when training or feed forward when predicting.
-func (n *Network) zeroNeuronValues() {
+func (n *Network) zeroNetwork() {
 	for _, layer := range n.Layers {
 		for _, neuron := range layer.Neurons {
 			neuron.Value = 0.0
@@ -181,8 +200,14 @@ func (n *Network) zeroNeuronValues() {
 func (n *Network) String() string {
 	s := "Network topology\n"
 	for idx, layer := range n.Layers {
-		s += fmt.Sprintf("Layer %v: %v with activation function %v\n",
-			idx, layer.numneurons, layer.A.String())
+		if layer.A != nil {
+			s += fmt.Sprintf("Layer %v: %v neurons with activation function %v\n",
+				idx, layer.numneurons, layer.A.String())
+		} else {
+			s += fmt.Sprintf("Input Layer %v: %v neurons\n",
+				idx, layer.numneurons)
+		}
+
 	}
 	return s
 }
@@ -211,16 +236,24 @@ func (a Activate) String() string {
 	return a.name
 }
 
-var Binary Activator = Activate{
+var Rectlin Activator = Activate{
 	forward: func(x float64) float64 {
-		if x > 0.5 {
-			return 1.0
-		} else {
+		switch {
+		case x >= 0:
+			return x
+		default:
 			return 0.0
 		}
 	},
-	backward: func(x float64) float64 { return 1.0 },
-	name:     "Binary",
+	backward: func(x float64) float64 {
+		switch {
+		case x >= 0:
+			return 1.0
+		default:
+			return 0.0
+		}
+	},
+	name: "Linrect",
 }
 
 var Linear Activator = Activate{
@@ -262,4 +295,22 @@ type ErrFuncer interface {
 var MSE ErrFuncer = ErrFunc{
 	forward:  func(x, y float64) float64 { return 0.5 * math.Pow(x-y, 2) },
 	backward: func(x, y float64) float64 { return x - y },
+}
+
+type WeightGenerator interface {
+	Init() float64
+}
+
+type WeightGen struct {
+	init func() float64
+}
+
+func (w WeightGen) Init() float64 {
+	return w.init()
+}
+
+func Normal(mean, std float64) WeightGenerator {
+	return &WeightGen{
+		init: func() float64 { return pRNG.NormFloat64()*std + mean },
+	}
 }

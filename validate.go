@@ -3,7 +3,28 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
+
+func doTest(m Executor) {
+	testData, err := ReadCSV(*testdatapath, 0)
+	if err != nil {
+		fmt.Printf("%s\n", err)
+		os.Exit(1)
+	}
+	resultFP, err := os.OpenFile("/home/kjs/testing/example_data/result.csv",
+		os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(0644))
+	if err != nil {
+		fmt.Printf("%s\n", err)
+		os.Exit(1)
+	}
+	defer resultFP.Close()
+	resultFP.WriteString(fmt.Sprintln("ImageId,Label"))
+	for _, input := range testData.Input {
+		prediction := maxValIDX(m.Execute(input))
+		resultFP.WriteString(strconv.Itoa(prediction) + "\n")
+	}
+}
 
 func doValidation(m Executor) {
 	right := 0
