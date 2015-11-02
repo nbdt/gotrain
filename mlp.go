@@ -90,6 +90,7 @@ func bMLP(n *Network, targets []float64) {
 	var (
 		activatePrime float64
 		costPrime     float64
+		delta         float64
 	)
 	outlayer := n.Layers[n.numlayers-1]
 	// Calculate delta of output layer
@@ -110,27 +111,36 @@ func bMLP(n *Network, targets []float64) {
 		layer := n.Layers[idx]
 		for _, neuron := range layer.Neurons {
 			for _, cxn := range neuron.Connections {
-				neuron.Delta += cxn.Weight * cxn.toNeuron.Delta
+				delta = cxn.Weight * cxn.toNeuron.Delta
+				neuron.Delta += delta
 			}
-			neuron.Delta *= layer.A.FPrime(neuron.Value)
+			delta = layer.A.FPrime(neuron.Value)
+			neuron.Delta *= delta
 		}
 		if layer.Bias != nil {
 			for _, cxn := range layer.Bias.Connections {
-				layer.Bias.Delta += cxn.Weight * cxn.toNeuron.Delta
+				delta = cxn.Weight * cxn.toNeuron.Delta
+				layer.Bias.Delta += delta
 			}
-			layer.Bias.Delta *= layer.A.FPrime(layer.Bias.OUT)
+			delta = layer.A.FPrime(layer.Bias.OUT)
+			layer.Bias.Delta *= delta
 		}
 	}
-	// Accumulate weight change
+}
+
+func accumulateWeightChange(n *Network) {
+	var weightChange float64
 	for _, layer := range n.Layers[0 : n.numlayers-1] {
 		for _, neuron := range layer.Neurons {
 			for _, cxn := range neuron.Connections {
-				cxn.weightChange += (n.eta * neuron.Value * cxn.toNeuron.Delta)
+				weightChange = n.eta * neuron.Value * cxn.toNeuron.Delta
+				cxn.weightChange += weightChange
 			}
 		}
 		if layer.Bias != nil {
 			for _, cxn := range layer.Bias.Connections {
-				cxn.weightChange += (n.eta * layer.Bias.ONE * cxn.toNeuron.Delta)
+				weightChange = n.eta * layer.Bias.OUT * cxn.toNeuron.Delta
+				cxn.weightChange += weightChange
 			}
 		}
 	}
@@ -140,13 +150,15 @@ func updateWeights(n *Network) {
 	var (
 		weightChange float64
 		momentumTerm float64
+		bze          = float64(batchsize)
 	)
 	// Apply deltas to connection weights
 	for _, layer := range n.Layers {
 		for _, neuron := range layer.Neurons {
 			for _, cxn := range neuron.Connections {
+				weightChange = cxn.weightChange / bze
 				momentumTerm = n.momentum * cxn.prevChange
-				weightChange = (1.0-n.momentum)*cxn.weightChange - momentumTerm
+				weightChange += momentumTerm
 				cxn.Weight -= weightChange
 				cxn.prevChange = weightChange
 				cxn.weightChange = 0.0
@@ -154,8 +166,9 @@ func updateWeights(n *Network) {
 		}
 		if layer.Bias != nil {
 			for _, cxn := range layer.Bias.Connections {
+				weightChange = cxn.weightChange / bze
 				momentumTerm = n.momentum * cxn.prevChange
-				weightChange = (1.0-n.momentum)*cxn.weightChange - momentumTerm
+				weightChange += momentumTerm
 				cxn.Weight -= weightChange
 				cxn.prevChange = weightChange
 				cxn.weightChange = 0.0
@@ -173,97 +186,6 @@ func (mlp *MLPExec) Execute(input []float64) []float64 {
 	output := fMLP(mlp.network, input)
 	mlp.network.zeroValues()
 	return output
-}
-func trainMLPConcurrentMiniBatch(d *TrainData) (e Executor) {
-	mlp := NewMLP(d.FeatureLen, d.OutputLen)
-	MLP := make(chan *Network)
-	ts := NewTrainStatus()
-	sgd := NewSGD(d.SampleLen, pRNG)
-	numbatches := d.SampleLen / batchsize
-	fmt.Fprintf(os.Stderr, "Beginning training with:\n%v", mlp)
-	fmt.Fprintf(os.Stderr, "MaxEpochs = %v and CostThreshold = %v\n\n", maxEpochs, costThresh)
-	for ts.epoch < maxEpochs && ts.epochCost > costThresh && !isStopEarly() {
-		batches := sgd.ChooseMany(numbatches)
-		for _, batch := range batches {
-			go trainMLPMiniBatch(mlp.Copy(), MLP, batch, d)
-		}
-		accumulateGradient(numbatches, mlp, MLP)
-		updateWeights(mlp)
-		mlp.zeroValuesAndDeltas()
-		fmt.Fprintf(os.Stderr, "Epoch: %v, Cost: %.4f\n", ts.epoch, ts.epochCost)
-		fmt.Fprintf(os.Stderr, "%v\n", mlp)
-		ts.epoch++
-		ts.finalCost = ts.epochCost
-		ts.epochCost, ts.sampCost = 0.0, 0.0
-	}
-	fmt.Fprintf(os.Stderr, "Finished training of %v\n", mlp)
-	fmt.Fprintf(os.Stderr, "Epoch: %v, Cost: %.4f\n", ts.epoch, ts.finalCost)
-	return &MLPExec{
-		network: mlp,
-	}
-}
-
-func trainMLPMiniBatch(mlp *Network, MLP chan *Network, batch []int, d *TrainData) {
-	for _, sampleIndex := range batch {
-		_ = fMLP(mlp, d.Input[sampleIndex])
-		expected := d.Output[sampleIndex]
-		bMLP(mlp, expected)
-		mlp.zeroValues()
-	}
-	MLP <- mlp
-}
-
-func accumulateGradient(numbatches int, mlp *Network, MLP chan *Network) {
-	for i := 0; i < numbatches; i++ {
-		mlpBatch := <-MLP
-		for layerIDX, layer := range mlpBatch.Layers {
-			for neuronIDX, neuron := range layer.Neurons {
-				mlp.Layers[layerIDX].Neurons[neuronIDX].Delta += neuron.Delta
-			}
-			if layer.Bias != nil {
-				mlp.Layers[layerIDX].Bias.Delta += layer.Bias.Delta
-			}
-		}
-	}
-}
-
-func trainMLPSyncronous(d *TrainData) (e Executor) {
-	mlp := NewMLP(d.FeatureLen, d.OutputLen)
-	ts := NewTrainStatus()
-	sgd := NewSGD(d.SampleLen, pRNG)
-	fmt.Fprintf(os.Stderr, "Beginning training with:\n%v", mlp)
-	fmt.Fprintf(os.Stderr, "MaxEpochs = %v and CostThreshold = %v\n\n", maxEpochs, costThresh)
-	for ts.epoch < maxEpochs && ts.epochCost > costThresh && !isStopEarly() {
-		ts.epochTime = time.Now()
-		sampleIndex := sgd.ChooseOne()
-		output := fMLP(mlp, d.Input[sampleIndex])
-		expected := d.Output[sampleIndex]
-		for idx, val := range output {
-			ts.sampCost += mlp.C.F(val, expected[idx]) / mlp.costDivisor
-		}
-		ts.epochCost += (ts.sampCost / d.SampleLength)
-		ts.sampCost = 0.0
-		bMLP(mlp, expected)
-		updateWeights(mlp)
-		mlp.zeroValuesAndDeltas()
-		if *verbose {
-			fmt.Fprintf(os.Stderr, "Expected: %v......Actual: %v\n",
-				expected, output)
-		}
-		if sgd.SampledAll() {
-			fmt.Fprintf(os.Stderr, "Epoch took %v\n", time.Now().Sub(ts.epochTime))
-			fmt.Fprintf(os.Stderr, "Epoch: %v, Cost: %.4f\n", ts.epoch, ts.epochCost)
-			fmt.Fprintf(os.Stderr, "%v\n", mlp)
-			ts.epoch++
-			ts.finalCost = ts.epochCost
-			ts.epochCost, ts.sampCost = 0.0, 0.0
-		}
-	}
-	fmt.Fprintf(os.Stderr, "Finished training of %v\n", mlp)
-	fmt.Fprintf(os.Stderr, "Epoch: %v, Cost: %.4f\n", ts.epoch, ts.finalCost)
-	return &MLPExec{
-		network: mlp,
-	}
 }
 
 func trainMLPSyncronousMiniBatch(d *TrainData) (e Executor) {
@@ -287,11 +209,8 @@ func trainMLPSyncronousMiniBatch(d *TrainData) (e Executor) {
 				ts.epochCost += (ts.sampCost / d.SampleLength)
 				ts.sampCost = 0.0
 				bMLP(mlp, expected)
+				accumulateWeightChange(mlp)
 				mlp.zeroValuesAndDeltas()
-				if *verbose {
-					fmt.Fprintf(os.Stderr, "Expected: %v......Actual: %v\n",
-						expected, output)
-				}
 			}
 			updateWeights(mlp)
 		}
