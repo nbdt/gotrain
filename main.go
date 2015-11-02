@@ -16,8 +16,7 @@ var (
 	validatedatapath = flag.String("validatedatapath", "", "path to train data csv")
 	testdatapath     = flag.String("testdatapath", "", "path to train data csv")
 	exportpath       = flag.String("exportpath", "", "path to export model after training")
-	cvsettings       = flag.String("cvsettings", "", "path to cross validation settings file")
-	outputs          = flag.Int("outputs", 1, "number of training outputs")
+	outputs          = flag.Int("outputs", 0, "number of training outputs")
 	verbose          = flag.Bool("verbose", false, "verbose output")
 )
 
@@ -90,6 +89,10 @@ func main() {
 		}
 		pprof.StartCPUProfile(f)
 		defer pprof.StopCPUProfile()
+	}
+	if *outputs == 0 {
+		fmt.Fprintln(os.Stderr, "Must specify number of outputs")
+		os.Exit(2)
 	}
 
 	for _, model := range models {

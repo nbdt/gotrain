@@ -9,8 +9,13 @@ import (
 )
 
 type TrainData struct {
-	Input  [][]float64
-	Output [][]float64
+	Input        [][]float64
+	FeatureLen   int
+	SampleLength float64
+	SampleLen    int
+	Output       [][]float64
+	OutputLength float64
+	OutputLen    int
 }
 
 func (td *TrainData) HasInputs() bool {
@@ -84,7 +89,11 @@ func ReadCSV(datapath string, numclasses int) (*TrainData, error) {
 		}
 		d.Output = append(d.Output, outf)
 	}
-
+	d.FeatureLen = len(d.Input[0])
+	d.SampleLength = float64(len(d.Input))
+	d.SampleLen = len(d.Input)
+	d.OutputLength = float64(len(d.Output[0]))
+	d.OutputLen = len(d.Output[0])
 	return d, nil
 }
 
@@ -105,7 +114,8 @@ func Normalize(d []float64) []float64 {
 	std = math.Sqrt(std)
 	res := make([]float64, numsamp)
 	for idx, v := range d {
-		res[idx] = (v - mean) / std
+		//res[idx] = (v - mean) / std
+		res[idx] = v / 255.0
 	}
 	return res
 }
