@@ -32,7 +32,7 @@ type RBMExec struct {
 	network *Network
 }
 
-func (rbm *RBMExec) Execute(input []float64) (output []float64) {
+func (rbm *RBMExec) Execute(input []float32) (output []float32) {
 	output = input
 	return output
 }

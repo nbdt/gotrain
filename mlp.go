@@ -13,10 +13,11 @@ var modelMLP = &Model{
 }
 
 var (
-	epsillon     = 1.0 / float64(1<<23)
+	epsillon     = 1.0 / float32(1<<23)
 	momentum     float64
 	learningRate float64
-	costThresh   float64
+	costThresh   float32
+	costThreshF  float64
 	maxEpochs    int
 	numworkers   int
 	batchsize    int
@@ -25,7 +26,7 @@ var (
 func init() {
 	modelMLP.Flag.Float64Var(&momentum, "momentum", 0.0, "Momentum of network (default 0)")
 	modelMLP.Flag.Float64Var(&learningRate, "learningRate", 1.0, "Learning rate of the of network")
-	modelMLP.Flag.Float64Var(&costThresh, "costThresh", -math.MaxFloat64, "Minimum epoch error")
+	modelMLP.Flag.Float64Var(&costThreshF, "costThresh", -math.MaxFloat64, "Minimum epoch error")
 	modelMLP.Flag.IntVar(&maxEpochs, "maxEpochs", math.MaxInt64, "Maximum epoch training cycles")
 	modelMLP.Flag.IntVar(&batchsize, "batchsize", 1, "number of batches within an epoch")
 	modelMLP.Flag.IntVar(&numworkers, "numworkers", 6, "number of batches within an epoch")
@@ -37,14 +38,15 @@ func init() {
 		fmt.Fprintf(os.Stderr, "learning rate [%v] is not between 0.0 and 1.0\n", learningRate)
 		os.Exit(2)
 	}
+	costThresh = float32(costThreshF)
 }
 
 // NewMLP constructs the convolutional neuro network based on the topology described in
 // Add* and Set* options
 func NewMLP(insize, outsize int) *Network {
 	// Define weight initialization function
-	n := NewNetwork(SetLearningRate(learningRate),
-		SetMomentum(momentum),
+	n := NewNetwork(SetLearningRate(float32(learningRate)),
+		SetMomentum(float32(momentum)),
 		SetCostor(CrossEntropy),
 		SetWeightInitFunc(Normal(0.0, 0.01)),
 		AddInputLayer(insize, true),
@@ -54,7 +56,7 @@ func NewMLP(insize, outsize int) *Network {
 }
 
 // fMLP runs the feed forward pass based on inputs and produces outputs of the network
-func fMLP(n *Network, inputs []float64) (outputs []float64) {
+func fMLP(n *Network, inputs []float32) (outputs []float32) {
 	// Set input layer values
 	for idx, val := range inputs {
 		n.Layers[0].Neurons[idx].Value = val
@@ -78,7 +80,7 @@ func fMLP(n *Network, inputs []float64) (outputs []float64) {
 		}
 	}
 	// Get values from output neurons to return
-	outputs = make([]float64, n.numout)
+	outputs = make([]float32, n.numout)
 	for idx, outputneuron := range n.Layers[n.numlayers-1].Neurons {
 		outputs[idx] = outputneuron.Value
 	}
@@ -87,11 +89,11 @@ func fMLP(n *Network, inputs []float64) (outputs []float64) {
 
 // backPropagate adjusts the connection weights of the network based on the error, Delta,
 // of each neuron computed during gradient decent
-func bMLP(n *Network, targets []float64) {
+func bMLP(n *Network, targets []float32) {
 	var (
-		activatePrime float64
-		costPrime     float64
-		delta         float64
+		activatePrime float32
+		costPrime     float32
+		delta         float32
 	)
 	outlayer := n.Layers[n.numlayers-1]
 	// Calculate delta of output layer
@@ -130,7 +132,7 @@ func bMLP(n *Network, targets []float64) {
 }
 
 func accumulateWeightChange(n *Network) {
-	var weightChange float64
+	var weightChange float32
 	for _, layer := range n.Layers[0 : n.numlayers-1] {
 		for _, neuron := range layer.Neurons {
 			for _, cxn := range neuron.Connections {
@@ -149,9 +151,9 @@ func accumulateWeightChange(n *Network) {
 
 func updateWeights(n *Network) {
 	var (
-		weightChange float64
-		momentumTerm float64
-		bze          = float64(batchsize)
+		weightChange float32
+		momentumTerm float32
+		bze          = float32(batchsize)
 	)
 	// Apply deltas to connection weights
 	for _, layer := range n.Layers {
@@ -183,7 +185,7 @@ type MLPExec struct {
 }
 
 // execMLP prediction on input given a trained network
-func (mlp *MLPExec) Execute(input []float64) []float64 {
+func (mlp *MLPExec) Execute(input []float32) []float32 {
 	output := fMLP(mlp.network, input)
 	mlp.network.zeroValues()
 	return output

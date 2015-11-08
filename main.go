@@ -21,7 +21,7 @@ var (
 )
 
 type Executor interface {
-	Execute(data []float64) []float64
+	Execute(data []float32) []float32
 }
 
 type Model struct {

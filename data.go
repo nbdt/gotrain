@@ -9,12 +9,12 @@ import (
 )
 
 type TrainData struct {
-	Input        [][]float64
+	Input        [][]float32
 	FeatureLen   int
-	SampleLength float64
+	SampleLength float32
 	SampleLen    int
-	Output       [][]float64
-	OutputLength float64
+	Output       [][]float32
+	OutputLength float32
 	OutputLen    int
 }
 
@@ -40,7 +40,7 @@ func (td *TrainData) OutputIsNormal() bool {
 	return td.isNormal(td.Output)
 }
 
-func (td *TrainData) isNormal(X [][]float64) bool {
+func (td *TrainData) isNormal(X [][]float32) bool {
 	zeroSize := len(X[0])
 	for _, x := range X {
 		if len(x) != zeroSize {
@@ -70,49 +70,51 @@ func ReadCSV(datapath string, numclasses int) (*TrainData, error) {
 
 	for _, row := range rows {
 		in := row[numclasses:]
-		inf := make([]float64, len(in))
+		inf := make([]float32, len(in))
 		for idx := range inf {
-			inf[idx], err = strconv.ParseFloat(strings.TrimSpace(in[idx]), 64)
+			val, err := strconv.ParseFloat(strings.TrimSpace(in[idx]), 32)
 			if err != nil {
 				return nil, err
 			}
+			inf[idx] = float32(val)
 		}
 		d.Input = append(d.Input, Normalize(inf))
 
 		out := row[:numclasses]
-		outf := make([]float64, len(out))
+		outf := make([]float32, len(out))
 		for idx := range outf {
-			outf[idx], err = strconv.ParseFloat(strings.TrimSpace(out[idx]), 64)
+			val, err := strconv.ParseFloat(strings.TrimSpace(out[idx]), 32)
 			if err != nil {
 				return nil, err
 			}
+			outf[idx] = float32(val)
 		}
 		d.Output = append(d.Output, outf)
 	}
 	d.FeatureLen = len(d.Input[0])
-	d.SampleLength = float64(len(d.Input))
+	d.SampleLength = float32(len(d.Input))
 	d.SampleLen = len(d.Input)
-	d.OutputLength = float64(len(d.Output[0]))
+	d.OutputLength = float32(len(d.Output[0]))
 	d.OutputLen = len(d.Output[0])
 	return d, nil
 }
 
-func Normalize(d []float64) []float64 {
+func Normalize(d []float32) []float32 {
 	var (
-		mean float64
-		std  float64
+		mean float32
+		std  float32
 	)
 	numsamp := len(d)
 	for _, v := range d {
 		mean += v
 	}
-	mean /= float64(numsamp)
+	mean /= float32(numsamp)
 	for _, v := range d {
-		std += math.Pow(v-mean, 2)
+		std += float32(math.Pow(float64(v-mean), 2))
 	}
-	std /= float64(numsamp)
-	std = math.Sqrt(std)
-	res := make([]float64, numsamp)
+	std /= float32(numsamp)
+	std = float32(math.Sqrt(float64(std)))
+	res := make([]float32, numsamp)
 	for idx, v := range d {
 		//res[idx] = (v - mean) / std
 		res[idx] = v / 255.0

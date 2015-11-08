@@ -8,10 +8,10 @@ import (
 
 // Connection to forward layer
 type Connection struct {
-	Weight       float64
-	weightChange float64
+	Weight       float32
+	weightChange float32
 	toNeuron     *Neuron
-	prevChange   float64
+	prevChange   float32
 }
 
 func (c *Connection) Copy() *Connection {
@@ -23,8 +23,8 @@ func (c *Connection) Copy() *Connection {
 
 // Neuron in any layer
 type Neuron struct {
-	Value       float64
-	Delta       float64
+	Value       float32
+	Delta       float32
 	Connections []*Connection
 }
 
@@ -45,9 +45,9 @@ func (n *Neuron) Copy() *Neuron {
 // This provides the constant term in the linear
 // equation of layers where bias is included
 type Bias struct {
-	ONE         float64
-	OUT         float64
-	Delta       float64
+	ONE         float32
+	OUT         float32
+	Delta       float32
 	Connections []*Connection
 }
 
@@ -176,14 +176,14 @@ func SetCostor(c Costor) func(*Network) {
 		case CE:
 			n.costDivisor = 1.0
 		case MSE:
-			n.costDivisor = float64(*outputs)
+			n.costDivisor = float32(*outputs)
 		}
 	}
 }
 
 // SetLearningRate of the network. Range 0.0 to 1.0, default is 1.0
 // Pass this function into NewNetwork to set the learning rate.
-func SetLearningRate(eta float64) func(*Network) {
+func SetLearningRate(eta float32) func(*Network) {
 	return func(n *Network) {
 		n.eta = eta
 	}
@@ -191,7 +191,7 @@ func SetLearningRate(eta float64) func(*Network) {
 
 // SetMomentum of the network. Range 0.0 to 1.0, default is 0.0
 // Pass this function into NewNetwork to set the Momentum.
-func SetMomentum(momentum float64) func(*Network) {
+func SetMomentum(momentum float32) func(*Network) {
 	return func(n *Network) {
 		n.momentum = momentum
 	}
@@ -210,11 +210,11 @@ type Network struct {
 	Layers          []*Layer
 	C               Costor
 	WeightGenerator WeightGenerator
-	costDivisor     float64
+	costDivisor     float32
 	numout          int
 	numlayers       int
-	eta             float64
-	momentum        float64
+	eta             float32
+	momentum        float32
 }
 
 func (n *Network) Copy() *Network {
@@ -316,9 +316,9 @@ func (n *Network) String() string {
 	s := "Network topology\n"
 	deadweights := 0.0
 	totalweights := 0.0
-	var weights [][]float64
+	var weights [][]float32
 	for idx, layer := range n.Layers {
-		weightLayer := make([]float64, 0)
+		weightLayer := make([]float32, 0)
 		weights = append(weights, weightLayer)
 		if layer.A != nil {
 			s += fmt.Sprintf("Layer %v: %v neurons with activation function %v\n",
@@ -327,24 +327,26 @@ func (n *Network) String() string {
 			s += fmt.Sprintf("Input Layer %v: %v neurons\n",
 				idx, layer.numneurons)
 		}
-		for _, neuron := range layer.Neurons {
-			for _, cxn := range neuron.Connections {
-				weights[idx] = append(weights[idx], cxn.Weight)
-				if math.IsNaN(cxn.Weight) || math.IsInf(cxn.Weight, 0) {
-					deadweights++
+		/*
+			for _, neuron := range layer.Neurons {
+				for _, cxn := range neuron.Connections {
+					weights[idx] = append(weights[idx], cxn.Weight)
+					if math.IsNaN(cxn.Weight) || math.IsInf(cxn.Weight, 0) {
+						deadweights++
+					}
+					totalweights++
 				}
-				totalweights++
 			}
-		}
-		if layer.Bias != nil {
-			for _, cxn := range layer.Bias.Connections {
-				weights[idx] = append(weights[idx], cxn.Weight)
-				if math.IsNaN(cxn.Weight) || math.IsInf(cxn.Weight, 0) {
-					deadweights++
+			if layer.Bias != nil {
+				for _, cxn := range layer.Bias.Connections {
+					weights[idx] = append(weights[idx], cxn.Weight)
+					if math.IsNaN(cxn.Weight) || math.IsInf(cxn.Weight, 0) {
+						deadweights++
+					}
+					totalweights++
 				}
-				totalweights++
 			}
-		}
+		*/
 	}
 	wstats := weightStats(weights[:len(weights)-1])
 	s += fmt.Sprintf("%v cost function\n", n.C)
@@ -354,11 +356,11 @@ func (n *Network) String() string {
 	return s
 }
 
-func weightStats(weights [][]float64) map[string][]float64 {
-	statMap := make(map[string][]float64)
-	statMap["Mean"] = make([]float64, 0)
-	statMap["StandardDeviation"] = make([]float64, 0)
-	var weightCount float64
+func weightStats(weights [][]float32) map[string][]float32 {
+	statMap := make(map[string][]float32)
+	statMap["Mean"] = make([]float32, 0)
+	statMap["StandardDeviation"] = make([]float32, 0)
+	var weightCount float32
 	for layerIDX, layer := range weights {
 		statMap["Mean"] = append(statMap["Mean"], 0.0)
 		for _, weight := range layer {
@@ -370,19 +372,19 @@ func weightStats(weights [][]float64) map[string][]float64 {
 	for idx, layer := range weights {
 		statMap["StandardDeviation"] = append(statMap["StandardDeviation"], 0.0)
 		for _, weight := range layer {
-			statMap["StandardDeviation"][idx] += math.Pow(weight-statMap["Mean"][idx], 2)
+			statMap["StandardDeviation"][idx] += float32(math.Pow(float64(weight-statMap["Mean"][idx]), 2))
 		}
 		statMap["StandardDeviation"][idx] /= weightCount
-		statMap["StandardDeviation"][idx] = math.Sqrt(statMap["StandardDeviation"][idx])
+		statMap["StandardDeviation"][idx] = float32(math.Sqrt(float64(statMap["StandardDeviation"][idx])))
 	}
 	return statMap
 
 }
 
 type TrainStatus struct {
-	sampCost  float64
-	epochCost float64
-	finalCost float64
+	sampCost  float32
+	epochCost float32
+	finalCost float32
 	epoch     int
 	epochTime time.Time
 }
@@ -401,22 +403,22 @@ func NewTrainStatus() *TrainStatus {
 }
 
 type Activator interface {
-	F(x float64) float64
-	FPrime(x float64) float64
+	F(x float32) float32
+	FPrime(x float32) float32
 	String() string
 }
 
 type RL struct {
-	forward  func(x float64) float64
-	backward func(x float64) float64
+	forward  func(x float32) float32
+	backward func(x float32) float32
 	name     string
 }
 
-func (a RL) F(x float64) float64 {
+func (a RL) F(x float32) float32 {
 	return a.forward(x)
 }
 
-func (a RL) FPrime(x float64) float64 {
+func (a RL) FPrime(x float32) float32 {
 	return a.backward(x)
 }
 
@@ -425,7 +427,7 @@ func (a RL) String() string {
 }
 
 var Rectlin Activator = RL{
-	forward: func(x float64) float64 {
+	forward: func(x float32) float32 {
 		switch {
 		case x >= 0.0:
 			return x
@@ -433,7 +435,7 @@ var Rectlin Activator = RL{
 			return 0.0
 		}
 	},
-	backward: func(x float64) float64 {
+	backward: func(x float32) float32 {
 		switch {
 		case x > 0.0:
 			return 1.0
@@ -445,16 +447,16 @@ var Rectlin Activator = RL{
 }
 
 type Lin struct {
-	forward  func(x float64) float64
-	backward func(x float64) float64
+	forward  func(x float32) float32
+	backward func(x float32) float32
 	name     string
 }
 
-func (a Lin) F(x float64) float64 {
+func (a Lin) F(x float32) float32 {
 	return a.forward(x)
 }
 
-func (a Lin) FPrime(x float64) float64 {
+func (a Lin) FPrime(x float32) float32 {
 	return a.backward(x)
 }
 
@@ -463,22 +465,22 @@ func (a Lin) String() string {
 }
 
 var Linear Activator = Lin{
-	forward:  func(x float64) float64 { return x },
-	backward: func(x float64) float64 { return 1.0 },
+	forward:  func(x float32) float32 { return x },
+	backward: func(x float32) float32 { return 1.0 },
 	name:     "Linear",
 }
 
 type Sig struct {
-	forward  func(x float64) float64
-	backward func(x float64) float64
+	forward  func(x float32) float32
+	backward func(x float32) float32
 	name     string
 }
 
-func (a Sig) F(x float64) float64 {
+func (a Sig) F(x float32) float32 {
 	return a.forward(x)
 }
 
-func (a Sig) FPrime(x float64) float64 {
+func (a Sig) FPrime(x float32) float32 {
 	return a.backward(x)
 }
 
@@ -487,22 +489,22 @@ func (a Sig) String() string {
 }
 
 var Sigmoid Activator = Sig{
-	forward:  func(x float64) float64 { return 1 / (1 + math.Exp(-x)) },
-	backward: func(x float64) float64 { return x * (1 - x) },
+	forward:  func(x float32) float32 { return 1 / (1 + float32(math.Exp(float64(-x)))) },
+	backward: func(x float32) float32 { return x * (1 - x) },
 	name:     "Sigmoid",
 }
 
 type TH struct {
-	forward  func(x float64) float64
-	backward func(x float64) float64
+	forward  func(x float32) float32
+	backward func(x float32) float32
 	name     string
 }
 
-func (a TH) F(x float64) float64 {
+func (a TH) F(x float32) float32 {
 	return a.forward(x)
 }
 
-func (a TH) FPrime(x float64) float64 {
+func (a TH) FPrime(x float32) float32 {
 	return a.backward(x)
 }
 
@@ -511,28 +513,28 @@ func (a TH) String() string {
 }
 
 var Tanh Activator = TH{
-	forward:  math.Tanh,
-	backward: func(x float64) float64 { return 1 - math.Pow(x, 2) },
+	forward:  func(x float32) float32 { return float32(math.Tanh(float64(x))) },
+	backward: func(x float32) float32 { return 1 - float32(math.Pow(float64(x), 2)) },
 	name:     "Tanh",
 }
 
 type Costor interface {
-	F(o, t float64) float64
-	FPrime(o, t float64) float64
+	F(o, t float32) float32
+	FPrime(o, t float32) float32
 	String() string
 }
 
 type MSE struct {
-	forward  func(o, t float64) float64
-	backward func(o, t float64) float64
+	forward  func(o, t float32) float32
+	backward func(o, t float32) float32
 	name     string
 }
 
-func (mse MSE) F(o, t float64) float64 {
+func (mse MSE) F(o, t float32) float32 {
 	return mse.forward(o, t)
 }
 
-func (mse MSE) FPrime(o, t float64) float64 {
+func (mse MSE) FPrime(o, t float32) float32 {
 	return mse.backward(o, t)
 }
 
@@ -541,22 +543,22 @@ func (mse MSE) String() string {
 }
 
 var MeanSquared Costor = MSE{
-	forward:  func(o, t float64) float64 { return 0.5 * math.Pow(o-t, 2.0) },
-	backward: func(o, t float64) float64 { return o - t },
+	forward:  func(o, t float32) float32 { return 0.5 * float32(math.Pow(float64(o-t), 2.0)) },
+	backward: func(o, t float32) float32 { return o - t },
 	name:     "MSE",
 }
 
 type CE struct {
-	forward  func(o, t float64) float64
-	backward func(o, t float64) float64
+	forward  func(o, t float32) float32
+	backward func(o, t float32) float32
 	name     string
 }
 
-func (ce CE) F(o, t float64) float64 {
+func (ce CE) F(o, t float32) float32 {
 	return ce.forward(o, t)
 }
 
-func (ce CE) FPrime(o, t float64) float64 {
+func (ce CE) FPrime(o, t float32) float32 {
 	return ce.backward(o, t)
 }
 
@@ -565,21 +567,21 @@ func (ce CE) String() string {
 }
 
 var CrossEntropy Costor = CE{
-	forward:  func(o, t float64) float64 { return -1.0 * (safeLog(o)*t + safeLog(1.0-o)*(1.0-t)) },
-	backward: func(o, t float64) float64 { return (o - t) },
+	forward:  func(o, t float32) float32 { return -1.0 * (safeLog(o)*t + safeLog(1.0-o)*(1.0-t)) },
+	backward: func(o, t float32) float32 { return (o - t) },
 	name:     "CrossEntropy",
 }
 
-func safeLog(x float64) float64 {
-	return math.Log(x + epsillon)
+func safeLog(x float32) float32 {
+	return float32(math.Log(float64(x + epsillon)))
 }
 
 type WeightGen struct {
-	init func() float64
+	init func() float32
 	name string
 }
 
-func (w WeightGen) Init() float64 {
+func (w WeightGen) Init() float32 {
 	return w.init()
 }
 
@@ -588,13 +590,13 @@ func (w WeightGen) String() string {
 }
 
 type WeightGenerator interface {
-	Init() float64
+	Init() float32
 	String() string
 }
 
-func Normal(mean, std float64) WeightGenerator {
+func Normal(mean, std float32) WeightGenerator {
 	return &WeightGen{
-		init: func() float64 { return pRNG.NormFloat64()*std + mean },
+		init: func() float32 { return float32(pRNG.NormFloat64())*std + mean },
 		name: fmt.Sprintf("Normal -- mean: %v and std: %v", mean, std),
 	}
 }

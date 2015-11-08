@@ -68,8 +68,8 @@ func doValidation(m Executor) {
 	}
 }
 
-func maxValIDX(in []float64) int {
-	maxval := 0.0
+func maxValIDX(in []float32) int {
+	var maxval float32 = 0.0
 	maxidx := 0
 	for idx, val := range in {
 		if val > maxval {
