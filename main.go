@@ -67,6 +67,7 @@ func (m *Model) SetExecutor(e Executor) {
 // The order here is the order in which they are printed by 'gotrain help'.
 var models = []*Model{
 	modelMLP,
+	modelRBM,
 }
 
 var pRNG *rand.Rand

@@ -8,7 +8,7 @@ import (
 )
 
 var modelMLP = &Model{
-	Train:       trainMLPSyncronousMiniBatch,
+	Train:       trainMLPConcurrentMiniBatch,
 	Description: `MLP -MultiLayer Perceptrontrain feed-forward neural network with back propagation`,
 }
 
@@ -18,7 +18,7 @@ var (
 	learningRate float64
 	costThresh   float64
 	maxEpochs    int
-	numnets      int
+	numworkers   int
 	batchsize    int
 )
 
@@ -28,6 +28,7 @@ func init() {
 	modelMLP.Flag.Float64Var(&costThresh, "costThresh", -math.MaxFloat64, "Minimum epoch error")
 	modelMLP.Flag.IntVar(&maxEpochs, "maxEpochs", math.MaxInt64, "Maximum epoch training cycles")
 	modelMLP.Flag.IntVar(&batchsize, "batchsize", 1, "number of batches within an epoch")
+	modelMLP.Flag.IntVar(&numworkers, "numworkers", 6, "number of batches within an epoch")
 	if momentum < 0.0 || momentum > 1.0 {
 		fmt.Fprintf(os.Stderr, "momentum [%v] is not between 0.0 and 1.0\n", momentum)
 		os.Exit(2)
@@ -47,7 +48,7 @@ func NewMLP(insize, outsize int) *Network {
 		SetCostor(CrossEntropy),
 		SetWeightInitFunc(Normal(0.0, 0.01)),
 		AddInputLayer(insize, true),
-		AddLayer(50, true, Rectlin),
+		AddLayer(500, true, Rectlin),
 		AddOutputLayer(outsize, Sigmoid))
 	return n
 }
@@ -226,4 +227,94 @@ func trainMLPSyncronousMiniBatch(d *TrainData) (e Executor) {
 	return &MLPExec{
 		network: mlp,
 	}
+}
+
+func trainMLPConcurrentMiniBatch(d *TrainData) (e Executor) {
+	masterMLP := NewMLP(d.FeatureLen, d.OutputLen)
+	in, net := make(chan int, 0), make(chan chan *Network, 0)
+	startProcs(in, net, d, masterMLP)
+	ts := NewTrainStatus()
+	sgd := NewSGD(d.SampleLen, pRNG)
+	numbatches := d.SampleLen / batchsize
+	fmt.Fprintf(os.Stderr, "Beginning training with:\n%v", masterMLP)
+	fmt.Fprintf(os.Stderr, "MaxEpochs = %v and CostThreshold = %v\n", maxEpochs, costThresh)
+	fmt.Fprintf(os.Stderr, "BatchCount = %v\n\n", numbatches)
+	for ts.epoch < maxEpochs && ts.epochCost > costThresh && !isStopEarly() {
+		ts.epochTime = time.Now()
+		batches := sgd.ChooseMany(numbatches)
+		for _, batch := range batches {
+			for _, sampleIDX := range batch {
+				in <- sampleIDX
+			}
+			updateWeightsConcurrent(net, masterMLP)
+		}
+		fmt.Fprintf(os.Stderr, "Epoch took %v\n", time.Now().Sub(ts.epochTime))
+		fmt.Fprintf(os.Stderr, "Epoch: %v, Cost: %.4f\n", ts.epoch, ts.epochCost)
+		fmt.Fprintf(os.Stderr, "%v\n", masterMLP)
+		ts.epoch++
+		ts.finalCost = ts.epochCost
+		ts.epochCost, ts.sampCost = 0.0, 0.0
+	}
+	fmt.Fprintf(os.Stderr, "Finished training of %v\n", masterMLP)
+	fmt.Fprintf(os.Stderr, "Epoch: %v, Cost: %.4f\n", ts.epoch, ts.finalCost)
+	return &MLPExec{
+		network: masterMLP,
+	}
+}
+
+func mergeWeights(masterMLP, mlp *Network) {
+	for lidx, layer := range masterMLP.Layers {
+		for nidx, neuron := range layer.Neurons {
+			for cidx, cxn := range neuron.Connections {
+				cxn.weightChange += mlp.Layers[lidx].Neurons[nidx].Connections[cidx].weightChange
+			}
+		}
+	}
+}
+
+func updateWeightsConcurrent(net chan chan *Network, masterMLP *Network) {
+	nets := make([]chan *Network, numworkers)
+	for i := 0; i < numworkers; i++ {
+		nets[i] = make(chan *Network, 0)
+		net <- nets[i]
+	}
+	for i := 0; i < numworkers; i++ {
+		mlp := <-nets[i]
+		mergeWeights(masterMLP, mlp)
+	}
+	updateWeights(masterMLP)
+	for i := 0; i < numworkers; i++ {
+		nets[i] <- masterMLP.Copy()
+		<-nets[i]
+	}
+}
+
+func startProcs(in chan int, net chan chan *Network, d *TrainData, mlp *Network) {
+	for i := 0; i < numworkers; i++ {
+		go runProc(in, net, d, mlp.Copy())
+	}
+}
+
+func runProc(in chan int, net chan chan *Network, d *TrainData, mlp *Network) {
+	ts := NewTrainStatus()
+	for {
+		select {
+		case netChan := <-net:
+			netChan <- mlp
+			mlp = <-netChan
+			close(netChan)
+		case sampleIDX := <-in:
+			output := fMLP(mlp, d.Input[sampleIDX])
+			expected := d.Output[sampleIDX]
+			for idx, val := range output {
+				ts.sampCost += mlp.C.F(val, expected[idx]) / mlp.costDivisor
+			}
+			ts.epochCost += (ts.sampCost / d.SampleLength)
+			ts.sampCost = 0.0
+			bMLP(mlp, expected)
+			accumulateWeightChange(mlp)
+			mlp.zeroValuesAndDeltas()
+		}
+	}
+
 }
